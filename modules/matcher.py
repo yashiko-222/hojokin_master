@@ -157,7 +157,7 @@ INDUSTRY_TO_SUBSIDY = {
 def select_search_keywords(
     extracted_keywords: list[dict],
     industries: list[dict] | None = None,
-    max_keywords: int = 10,
+    max_keywords: int = 5,
 ) -> list[str]:
     """
     抽出されたキーワードと推定業種から、補助金検索に最適なキーワードを選定する。
@@ -481,7 +481,8 @@ def match_subsidies(
         return not (definitely_large and subsidy.get("eligible_scale", "sme") == "sme")
 
     # ===== 1. Jグランツ内蔵データの検索・スコアリング =====
-    api_result = search_subsidies_multi_keywords(search_terms, limit_per_keyword=5)
+    # 速度優先で1キーワードあたりの取得件数を絞る（API呼び出し総数を削減）。
+    api_result = search_subsidies_multi_keywords(search_terms, limit_per_keyword=3)
     builtin_excluded = 0
     scored_subsidies = []
     for subsidy in api_result["subsidies"]:
