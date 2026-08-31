@@ -14,6 +14,7 @@ from bs4 import BeautifulSoup
 
 
 BING_SEARCH_URL = "https://www.bing.com/search"
+DDG_SEARCH_URL = "https://html.duckduckgo.com/html/"
 WIKIPEDIA_API = "https://ja.wikipedia.org/w/api.php"
 
 # 公式サイトとして採用しないドメイン（取引所・政府DB・企業情報ポータル・SNS等）
@@ -292,9 +293,23 @@ def _core_company_name(company_query: str) -> str:
     return core
 
 
+_SEARCH_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "ja-JP,ja;q=0.9",
+}
+
+
 def search_web(query: str, max_results: int = 10) -> list[dict]:
     """
-    Bingでウェブ検索を行い、結果を返す。
+    ウェブ検索を行い、結果を返す。
+
+    DuckDuckGo（HTML版）を主エンジンとする。Bingは企業名検索で無関係な結果
+    （例: 「西日本シティ銀行」で「西」の漢字解説）を返すことがあるため、
+    DDGが空のときのフォールバックとしてのみ使う。
 
     Args:
         query: 検索クエリ（企業名や自然言語）
@@ -303,20 +318,77 @@ def search_web(query: str, max_results: int = 10) -> list[dict]:
     Returns:
         [{"title": str, "url": str, "snippet": str}, ...]
     """
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        ),
-        "Accept-Language": "ja-JP,ja;q=0.9",
-    }
+    results = _search_duckduckgo(query, max_results)
+    if results:
+        return results
+    # フォールバック: Bing
+    return _search_bing(query, max_results)
 
+
+def _search_duckduckgo(query: str, max_results: int = 10) -> list[dict]:
+    """DuckDuckGo（HTML版）で検索する。"""
+    try:
+        response = requests.post(
+            DDG_SEARCH_URL,
+            data={"q": query, "kl": "jp-jp"},
+            headers=_SEARCH_HEADERS,
+            timeout=15,
+        )
+        response.raise_for_status()
+    except requests.exceptions.RequestException:
+        return []
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    results = []
+    seen_domains = set()
+
+    for result in soup.select("div.result, div.web-result"):
+        link_el = result.select_one("a.result__a")
+        if not link_el or not link_el.get("href"):
+            continue
+
+        title = link_el.get_text(strip=True)
+        # DDGはリダイレクトURL（/l/?uddg=...）を挟むので実URLを取り出す
+        real_url = _extract_ddg_url(link_el.get("href", ""))
+        if not real_url:
+            continue
+
+        reg_domain = _registrable_domain(real_url)
+        if reg_domain in seen_domains:
+            continue
+        seen_domains.add(reg_domain)
+
+        snippet_el = result.select_one(".result__snippet")
+        snippet = snippet_el.get_text(strip=True) if snippet_el else ""
+
+        results.append({"title": title, "url": real_url, "snippet": snippet})
+        if len(results) >= max_results:
+            break
+
+    return results
+
+
+def _extract_ddg_url(href: str) -> str:
+    """DuckDuckGoのリダイレクトURL（uddg=）から実URLを取り出す。"""
+    if not href:
+        return ""
+    m = re.search(r"[?&]uddg=([^&]+)", href)
+    if m:
+        return urllib.parse.unquote(m.group(1))
+    if href.startswith("//"):
+        return "https:" + href
+    if href.startswith("http"):
+        return href
+    return ""
+
+
+def _search_bing(query: str, max_results: int = 10) -> list[dict]:
+    """Bingで検索する（DDGのフォールバック）。"""
     try:
         response = requests.get(
             BING_SEARCH_URL,
             params={"q": query, "setlang": "ja", "mkt": "ja-JP"},
-            headers=headers,
+            headers=_SEARCH_HEADERS,
             timeout=15,
         )
         response.raise_for_status()
@@ -328,7 +400,6 @@ def search_web(query: str, max_results: int = 10) -> list[dict]:
     seen_domains = set()
 
     for li in soup.select("li.b_algo"):
-        # 広告・スポンサーリンクを除外（Canva等の検索連動広告対策）
         if _is_ad_element(li):
             continue
 
@@ -337,27 +408,19 @@ def search_web(query: str, max_results: int = 10) -> list[dict]:
             continue
 
         title = link_el.get_text(strip=True)
-        raw_href = link_el.get("href", "")
-        real_url = _extract_real_url(raw_href)
+        real_url = _extract_real_url(link_el.get("href", ""))
         if not real_url:
             continue
 
-        # 登録ドメイン単位（www.除去）で重複排除
         reg_domain = _registrable_domain(real_url)
         if reg_domain in seen_domains:
             continue
         seen_domains.add(reg_domain)
 
-        # スニペット取得
         snippet_el = li.select_one(".b_caption p") or li.select_one("p")
         snippet = snippet_el.get_text(strip=True) if snippet_el else ""
 
-        results.append({
-            "title": title,
-            "url": real_url,
-            "snippet": snippet,
-        })
-
+        results.append({"title": title, "url": real_url, "snippet": snippet})
         if len(results) >= max_results:
             break
 
