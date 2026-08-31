@@ -392,7 +392,7 @@ with st.sidebar:
     st.header("⚙️ 設定")
     crawl_subpages = st.checkbox("サブページもクロールする", value=True,
                                   help="会社概要や事業内容ページも解析します")
-    max_results = st.slider("表示する補助金の最大件数", 3, 20, 10)
+    max_results = st.slider("表示する補助金の最大件数", 3, 50, 10)
 
     # ===== 管理者ログイン（手動登録は管理者のみ）=====
     st.divider()
