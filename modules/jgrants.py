@@ -7,6 +7,7 @@ import html as _html
 import logging
 import re
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 
@@ -243,10 +244,18 @@ def search_subsidies_from_api(keyword: str, limit: int = 10) -> dict:
         if isinstance(item, dict)
     ][:limit]
 
-    # 一覧には金額・補助率・説明が無いため、返す件数分だけ詳細を取得して補完する
+    # 一覧には金額・補助率・説明が無いため、返す件数分だけ詳細を取得して補完する。
+    # 詳細APIの呼び出しはネットワーク待ちが主なので並列化して高速化する。
+    if raw_list:
+        with ThreadPoolExecutor(max_workers=len(raw_list)) as executor:
+            details = list(
+                executor.map(lambda it: _fetch_subsidy_detail(it.get("id", "")), raw_list)
+            )
+    else:
+        details = []
+
     subsidies = []
-    for item in raw_list:
-        detail = _fetch_subsidy_detail(item.get("id", ""))
+    for item, detail in zip(raw_list, details):
         merged = {**item, **detail} if detail else item
         subsidies.append(_normalize_api_subsidy(merged))
 

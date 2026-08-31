@@ -5,6 +5,7 @@
 
 import re
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -601,18 +602,24 @@ def crawl_and_extract(url: str, crawl_subpages: bool = True) -> dict:
         # トップページから事業概要を抽出
         summary = extract_summary(html)
 
-        # サブページもクロール
+        # サブページもクロール（並列取得で高速化）
         if crawl_subpages:
             internal_links = get_internal_links(html, url)
-            for link in internal_links:
+
+            def _fetch_sub(link: str) -> str | None:
+                # 遅いページを待ちすぎないようタイムアウトは短めに設定
                 try:
-                    sub_html = fetch_page(link, timeout=10)
-                    sub_text = extract_text_from_html(sub_html)
-                    all_text += f"\n{sub_text}"
-                    pages_crawled += 1
+                    return extract_text_from_html(fetch_page(link, timeout=6))
                 except Exception:
-                    # サブページの取得失敗は無視
-                    continue
+                    return None  # 個別ページの取得失敗は無視
+
+            if internal_links:
+                # ネットワーク待ちが主なのでスレッドで同時取得する
+                with ThreadPoolExecutor(max_workers=len(internal_links)) as executor:
+                    for sub_text in executor.map(_fetch_sub, internal_links):
+                        if sub_text:
+                            all_text += f"\n{sub_text}"
+                            pages_crawled += 1
 
         # キーワード抽出
         keywords = extract_keywords(all_text)
