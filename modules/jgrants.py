@@ -30,6 +30,10 @@ _REQUIRED_SEARCH_PARAMS = {
 # Jグランツ補助金の公開詳細ページURL
 _JGRANTS_SUBSIDY_PAGE = "https://www.jgrants-portal.go.jp/subsidy/"
 
+# 補助金詳細のプロセス内キャッシュ（subsidy_id -> 詳細dict）。
+# 複数キーワード検索で同じ補助金が重複ヒットしても詳細APIを一度しか叩かないための最適化。
+_detail_cache: dict[str, dict] = {}
+
 
 def _call_jgrants_api(params: dict) -> dict:
     """
@@ -188,6 +192,9 @@ def _fetch_subsidy_detail(subsidy_id: str) -> dict:
     """
     if not subsidy_id:
         return {}
+    # キャッシュ済みなら再取得しない（同一補助金の詳細APIの重複呼び出しを防ぐ）
+    if subsidy_id in _detail_cache:
+        return _detail_cache[subsidy_id]
     try:
         resp = requests.get(
             f"{_JGRANTS_API_BASE}/subsidies/id/{subsidy_id}",
@@ -197,9 +204,12 @@ def _fetch_subsidy_detail(subsidy_id: str) -> dict:
         resp.raise_for_status()
         data = resp.json()
         result = data.get("result") or []
-        return result[0] if result and isinstance(result[0], dict) else {}
+        detail = result[0] if result and isinstance(result[0], dict) else {}
+        _detail_cache[subsidy_id] = detail
+        return detail
     except requests.exceptions.RequestException as e:
         logger.info("Jグランツ詳細取得失敗 id=%s: %s", subsidy_id, e)
+        # 失敗は空dictを返すがキャッシュしない（次回リトライできるように）
         return {}
 
 
