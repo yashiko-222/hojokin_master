@@ -110,7 +110,7 @@ def search_wikipedia_official(company_query: str) -> list[dict]:
             timeout=15,
         )
         page.raise_for_status()
-        soup = BeautifulSoup(page.text, "lxml")
+        soup = BeautifulSoup(page.text, "html.parser")
 
         infobox = soup.select_one("table.infobox")
         if not infobox:
@@ -312,7 +312,7 @@ def search_web(query: str, max_results: int = 10) -> list[dict]:
     except requests.exceptions.RequestException:
         return []
 
-    soup = BeautifulSoup(response.text, "lxml")
+    soup = BeautifulSoup(response.text, "html.parser")
     results = []
     seen_domains = set()
 

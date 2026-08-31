@@ -120,7 +120,7 @@ def extract_text_from_html(html: str) -> str:
     Returns:
         クリーンなテキスト
     """
-    soup = BeautifulSoup(html, "lxml")
+    soup = BeautifulSoup(html, "html.parser")
 
     # 不要なタグを削除
     for tag in soup(["script", "style", "nav", "footer", "header", "noscript"]):
@@ -435,7 +435,7 @@ def extract_summary(html: str, max_length: int = 300) -> str:
     Returns:
         事業概要の文字列
     """
-    soup = BeautifulSoup(html, "lxml")
+    soup = BeautifulSoup(html, "html.parser")
 
     summary_parts = []
 
@@ -521,7 +521,7 @@ def get_internal_links(html: str, base_url: str, max_links: int = 6) -> list[str
     Returns:
         内部リンクURL（重要度順）のリスト
     """
-    soup = BeautifulSoup(html, "lxml")
+    soup = BeautifulSoup(html, "html.parser")
     base_domain = urlparse(base_url).netloc
 
     # URL → スコア（アンカーテキストとURLパスの両方で判定）
@@ -680,7 +680,7 @@ def extract_subsidy_from_url(url: str) -> dict:
             "error": f"ページの取得に失敗しました: {e}",
         }
 
-    soup = BeautifulSoup(html, "lxml")
+    soup = BeautifulSoup(html, "html.parser")
 
     # タイトル: <title> → 無ければ最初の h1
     title = ""
@@ -716,7 +716,7 @@ _MIRASAPO_EXCLUDE = ["/subsidy/guide", "/subsidy/"]
 
 def _collect_mirasapo_links(listing_html: str) -> list[str]:
     """ミラサポplusの一覧HTMLから個別補助金ページのURLを収集する。"""
-    soup = BeautifulSoup(listing_html, "lxml")
+    soup = BeautifulSoup(listing_html, "html.parser")
     urls = []
     seen = set()
     for a in soup.select("a[href]"):
