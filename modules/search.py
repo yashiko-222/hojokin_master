@@ -16,10 +16,13 @@ from bs4 import BeautifulSoup
 BING_SEARCH_URL = "https://www.bing.com/search"
 WIKIPEDIA_API = "https://ja.wikipedia.org/w/api.php"
 
-# 公式サイトとして採用しないドメイン（取引所・政府DB等）
+# 公式サイトとして採用しないドメイン（取引所・政府DB・企業情報ポータル・SNS等）
 _WIKI_LINK_BLOCKLIST = [
     "jpx.co.jp", "sec.gov", "edinet", "wikidata.org", "wikimedia",
     "twitter.com", "x.com", "facebook.com", "google.com",
+    # 企業情報ポータル・株価/財務DB（公式サイトではない）
+    "nikkei.com", "houjin-bangou.nta.go.jp", "bloomberg.co.jp",
+    "reuters.com", "buffett-code.com", "ullet.com",
 ]
 
 # 公式HP判定で減点したいドメイン（ポータル・SNS・求人等）
@@ -118,13 +121,21 @@ def search_wikipedia_official(company_query: str) -> list[dict]:
 
         official_url = None
 
-        # 「公式サイト」「外部リンク」行を優先的に探す
+        # 「公式サイト」「ウェブサイト」「外部リンク」行を優先的に探す。
+        # 企業記事では公式サイトが「外部リンク」欄に入っていることが多い。
         for row in infobox.select("tr"):
             header = row.select_one("th")
-            if header and ("公式" in header.get_text() or "ウェブサイト" in header.get_text()):
+            if header and any(
+                kw in header.get_text()
+                for kw in ("公式", "ウェブサイト", "ウェブページ", "外部リンク", "URL")
+            ):
                 link = row.select_one("a.external")
-                if link and link.get("href", "").startswith("http"):
-                    official_url = link["href"]
+                href = link.get("href", "") if link else ""
+                # ヘッダーが該当しても、取引所・DB等のリンクは公式サイトではない
+                if href.startswith("http") and not any(
+                    b in href for b in _WIKI_LINK_BLOCKLIST
+                ):
+                    official_url = href
                     break
 
         # 見つからなければ、ブロックリスト外の最初のexternalリンク
