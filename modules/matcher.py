@@ -3,9 +3,6 @@
 抽出したキーワードを元に、最適な補助金を選定・ランキングする。
 """
 
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-
 from modules import rag
 from modules.jgrants import (
     format_subsidy_info,
@@ -256,14 +253,10 @@ def calculate_relevance_score(
         company_text = f"{company_text} {summary}"
 
     # --- TF-IDF類似度（重みは控えめ。汎用テキストで差が出にくいため）---
+    # scikit-learn を使わず純Python実装（rag.tfidf_cosine_similarity）で算出。
     similarity = 0.0
     if subsidy_text.strip() and company_text.strip():
-        try:
-            vectorizer = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4))
-            tfidf_matrix = vectorizer.fit_transform([company_text, subsidy_text])
-            similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
-        except ValueError:
-            similarity = 0.0
+        similarity = rag.tfidf_cosine_similarity(company_text, subsidy_text)
 
     # 【C】企業固有キーワードと補助金カテゴリ語の直接一致を評価。
     # 本業を表す具体語の一致は強く、汎用トレンド語の一致は弱く評価する。

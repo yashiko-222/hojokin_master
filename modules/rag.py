@@ -6,8 +6,8 @@ RAG（検索拡張）用の埋め込み・類似度検索モジュール。
 
 埋め込みバックエンドは環境に応じて自動選択する:
   1. sentence-transformers（多言語E5）が利用可能ならそれを使用（意味ベクトル）
-  2. 無ければ scikit-learn の TF-IDF にフォールバック（文字n-gram）
-どちらも無い場合でも語の重なり率で最低限のスコアを返し、必ず動作する。
+  2. 無ければ純Python実装の TF-IDF（文字n-gram）を使用（scikit-learn非依存）
+最終手段として語の重なり率でも最低限のスコアを返し、必ず動作する。
 
 ※ 補助金の手動登録件数は多くない想定のため、Vector DB（Chroma等）は使わず
    オンメモリでコサイン類似度を計算する軽量構成とする。件数が増えた場合は
@@ -18,6 +18,80 @@ from __future__ import annotations
 
 import math
 import re
+from collections import Counter
+
+
+# ===== 純Python TF-IDF（scikit-learn非依存） =====
+# scikit-learn の TfidfVectorizer(analyzer="char_wb", ngram_range=(2,4)) 相当を
+# 標準ライブラリのみで実装する。scipy/numpy を引き込まないためメモリが軽い。
+
+def _char_wb_ngrams(text: str, n_min: int = 2, n_max: int = 4) -> list[str]:
+    """
+    scikit-learn の char_wb 相当の文字n-gramを生成する。
+    各単語を空白で囲み（境界を尊重）、n_min〜n_maxの文字窓を切り出す。
+    """
+    text = text.lower()
+    tokens = text.split()
+    ngrams: list[str] = []
+    for tok in tokens:
+        w = f" {tok} "
+        length = len(w)
+        for n in range(n_min, n_max + 1):
+            if length < n:
+                # scikit-learnは単語長がn未満なら単語全体(空白付き)を1つ採用
+                if n == n_min:
+                    ngrams.append(w)
+                continue
+            for i in range(length - n + 1):
+                ngrams.append(w[i:i + n])
+    return ngrams
+
+
+def _tfidf_cosine(text_a: str, text_b: str) -> float:
+    """
+    2テキスト間の TF-IDF コサイン類似度を純Pythonで計算する。
+    2文書コーパス（[a, b]）に対する char_wb TF-IDF を L2 正規化してコサインを取る。
+    scikit-learn の既定（smooth_idf=True, sublinear_tf=False, norm="l2"）に合わせる。
+    """
+    if not text_a.strip() or not text_b.strip():
+        return 0.0
+
+    grams_a = _char_wb_ngrams(text_a)
+    grams_b = _char_wb_ngrams(text_b)
+    tf_a = Counter(grams_a)
+    tf_b = Counter(grams_b)
+    if not tf_a or not tf_b:
+        return 0.0
+
+    vocab = set(tf_a) | set(tf_b)
+    n_docs = 2
+
+    # IDF（smooth_idf=True）: idf = ln((1+n)/(1+df)) + 1
+    def idf(term: str) -> float:
+        df = (1 if term in tf_a else 0) + (1 if term in tf_b else 0)
+        return math.log((1 + n_docs) / (1 + df)) + 1.0
+
+    vec_a: dict[str, float] = {}
+    vec_b: dict[str, float] = {}
+    for term in vocab:
+        w = idf(term)
+        if tf_a.get(term):
+            vec_a[term] = tf_a[term] * w
+        if tf_b.get(term):
+            vec_b[term] = tf_b[term] * w
+
+    # L2正規化してドット積（＝コサイン類似度）
+    na = math.sqrt(sum(v * v for v in vec_a.values()))
+    nb = math.sqrt(sum(v * v for v in vec_b.values()))
+    if na == 0 or nb == 0:
+        return 0.0
+    dot = sum(vec_a[t] * vec_b[t] for t in vec_a.keys() & vec_b.keys())
+    return dot / (na * nb)
+
+
+def tfidf_cosine_similarity(text_a: str, text_b: str) -> float:
+    """2テキストのTF-IDFコサイン類似度（0〜1）。外部モジュール向け公開API。"""
+    return _tfidf_cosine(text_a, text_b)
 
 
 # ===== 埋め込みバックエンドの遅延ロード =====
@@ -44,11 +118,7 @@ def get_backend_name() -> str:
     """現在有効な埋め込みバックエンド名を返す（UI表示・デバッグ用）。"""
     if _get_sbert() is not None:
         return "sentence-transformers (multilingual-e5-small)"
-    try:
-        import sklearn  # noqa: F401
-        return "TF-IDF (scikit-learn)"
-    except Exception:
-        return "語重なり (フォールバック)"
+    return "TF-IDF (pure-python char n-gram)"
 
 
 def _cosine(a, b) -> float:
@@ -110,16 +180,9 @@ def rank_by_similarity(query: str, documents: list[str]) -> list[float]:
         except Exception:
             pass
 
-    # 2) TF-IDF（scikit-learn）
+    # 2) 純Python TF-IDF（char_wb 2-4gram コサイン類似度）
     try:
-        from sklearn.feature_extraction.text import TfidfVectorizer
-        from sklearn.metrics.pairwise import cosine_similarity
-
-        corpus = [query] + documents
-        vectorizer = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4))
-        matrix = vectorizer.fit_transform(corpus)
-        sims = cosine_similarity(matrix[0:1], matrix[1:])[0]
-        return [float(s) for s in sims]
+        return [_tfidf_cosine(query, d) for d in documents]
     except Exception:
         pass
 
