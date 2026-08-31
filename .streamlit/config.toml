@@ -1,0 +1,7 @@
+[server]
+headless = true
+# Streamlit Community Cloud ではポートはプラットフォームが管理するため指定不要。
+# ローカルで headless 起動したい場合にこの設定が使われる。
+
+[browser]
+gatherUsageStats = false

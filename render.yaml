@@ -1,0 +1,18 @@
+# Render（https://render.com）用デプロイ設定（バックエンド: FastAPI）
+# GitHub連携でこのリポジトリを指定すると、この設定に従ってデプロイされる。
+services:
+  - type: web
+    name: hojokin-backend
+    runtime: python
+    plan: free
+    # backend/requirements.txt に FastAPI 系の依存をまとめている
+    buildCommand: pip install -r backend/requirements.txt
+    # Render が割り当てる $PORT で待ち受ける
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.6"
+      # フロント（Streamlit）のURLが決まったら、そのオリジンを設定する。
+      # 例: https://your-frontend.streamlit.app
+      - key: ALLOWED_ORIGINS
+        value: "*"

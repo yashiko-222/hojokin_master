@@ -1,0 +1,5 @@
+# フロントエンド（Streamlit）用の依存関係
+# Streamlit Community Cloud はリポジトリ直下の requirements.txt を参照するため、
+# フロント専用リポジトリに切り出す場合はこの内容を requirements.txt として配置する。
+streamlit==1.37.0
+requests==2.32.3

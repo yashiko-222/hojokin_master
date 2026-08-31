@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# 仮想環境
+.venv/
+venv/
+env/
+ENV/
+
+# Streamlit secrets（実値。コミットしない）
+.streamlit/secrets.toml
+
+# ローカル作業用バックアップ（デプロイ対象外）
+backups/
+
+# 提案資料（バイナリ・デプロイ不要）
+*.pptx
+
+# エディタ・OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ログ・一時ファイル
+*.log
+_*.txt
+_*.py
