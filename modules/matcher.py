@@ -3,8 +3,11 @@
 抽出したキーワードを元に、最適な補助金を選定・ランキングする。
 """
 
+from concurrent.futures import ThreadPoolExecutor
+
 from modules import rag
 from modules.jgrants import (
+    enrich_with_detail,
     format_subsidy_info,
     get_custom_subsidies,
     search_subsidies_multi_keywords,
@@ -173,8 +176,10 @@ def select_search_keywords(
     search_terms = []
     used_categories = set()
 
-    # 推定業種から優先的に検索語を追加（概要分析の結果を反映）
-    # 各業種のカテゴリ語を複数入れ、関連する補助金を取りこぼさない
+    # 推定業種から優先的に検索語を追加（概要分析の結果を反映）。
+    # ただし業種語だけで上限を使い切らないよう、業種由来は max_keywords の
+    # 半分程度までに制限する（残り枠を抽出キーワードに回すため）。
+    industry_cap = max(1, max_keywords // 2 + 1)
     if industries:
         for ind_info in industries:
             industry = ind_info["industry"]
@@ -182,6 +187,10 @@ def select_search_keywords(
                 if term not in used_categories:
                     search_terms.append(term)
                     used_categories.add(term)
+                if len(search_terms) >= industry_cap:
+                    break
+            if len(search_terms) >= industry_cap:
+                break
 
     for kw_info in extracted_keywords:
         keyword = kw_info["keyword"]
@@ -212,7 +221,8 @@ def select_search_keywords(
             if len(search_terms) >= 3:
                 break
 
-    return search_terms
+    # 最終的な上限を保証（業種語込みで max_keywords を超えないようにする）
+    return search_terms[:max_keywords]
 
 
 def calculate_relevance_score(
@@ -530,6 +540,12 @@ def match_subsidies(
     all_scored = scored_subsidies + custom_scored
     all_scored.sort(key=lambda x: x["relevance_score"], reverse=True)
     results = all_scored[:max_results]
+
+    # ===== 3.5 表示する上位だけ詳細を補完（高速化の要）=====
+    # 全件ではなく最終表示分だけJグランツ詳細APIを叩く。並列で取得する。
+    if results:
+        with ThreadPoolExecutor(max_workers=len(results)) as executor:
+            results = list(executor.map(enrich_with_detail, results))
 
     total_found = len(api_result["subsidies"]) + len(custom_scored)
 

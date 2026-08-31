@@ -17,7 +17,10 @@ logger = logging.getLogger(__name__)
 
 # JグランツAPI（デジタル庁公開API・APIキー不要）
 _JGRANTS_API_BASE = "https://api.jgrants-portal.go.jp/exp/v1/public"
-_API_TIMEOUT = 10  # 秒
+_API_TIMEOUT = 10  # 秒（一覧検索用）
+# 詳細取得は件数が多く、応答しない補助金の待ち時間が積み重なるため短めに設定。
+# タイムアウトした補助金は一覧情報（タイトル・上限額）のみで表示される。
+_DETAIL_TIMEOUT = 3  # 秒（詳細取得用）
 
 # JグランツAPIの必須パラメータ（キーワード検索時）。
 # keyword に加えて sort / order / acceptance を送らないと 400 Bad request になる。
@@ -198,7 +201,7 @@ def _fetch_subsidy_detail(subsidy_id: str) -> dict:
     try:
         resp = requests.get(
             f"{_JGRANTS_API_BASE}/subsidies/id/{subsidy_id}",
-            timeout=_API_TIMEOUT,
+            timeout=_DETAIL_TIMEOUT,
             headers={"Accept": "application/json"},
         )
         resp.raise_for_status()
@@ -236,9 +239,16 @@ def check_api_availability() -> dict:
     return {"available": True, "message": "JグランツAPI 接続OK"}
 
 
-def search_subsidies_from_api(keyword: str, limit: int = 10) -> dict:
+def search_subsidies_from_api(
+    keyword: str, limit: int = 10, fetch_detail: bool = True
+) -> dict:
     """
     JグランツAPIでキーワード検索する。
+
+    fetch_detail=True の場合、各補助金の詳細（補助率・説明等）も取得する。
+    fetch_detail=False の場合は一覧情報のみ返す（高速）。詳細は後段で
+    enrich_with_detail() を使い、表示対象の上位だけ取得するのが推奨。
+
     Returns: {"subsidies": list[dict], "total_count": int, "error": str|None}
     """
     # keyword は2文字以上が必須。1文字の場合はAPIが400を返すためスキップ。
@@ -254,23 +264,54 @@ def search_subsidies_from_api(keyword: str, limit: int = 10) -> dict:
         if isinstance(item, dict)
     ][:limit]
 
-    # 一覧には金額・補助率・説明が無いため、返す件数分だけ詳細を取得して補完する。
-    # 詳細APIの呼び出しはネットワーク待ちが主なので並列化して高速化する。
-    if raw_list:
+    if fetch_detail and raw_list:
+        # 一覧には金額・補助率・説明が無いため詳細を取得して補完する。
+        # 詳細APIはネットワーク待ちが主なので並列化する。
         with ThreadPoolExecutor(max_workers=len(raw_list)) as executor:
             details = list(
                 executor.map(lambda it: _fetch_subsidy_detail(it.get("id", "")), raw_list)
             )
+        subsidies = [
+            _normalize_api_subsidy({**item, **detail} if detail else item)
+            for item, detail in zip(raw_list, details)
+        ]
     else:
-        details = []
-
-    subsidies = []
-    for item, detail in zip(raw_list, details):
-        merged = {**item, **detail} if detail else item
-        subsidies.append(_normalize_api_subsidy(merged))
+        # 詳細を取らず一覧情報のみで正規化（高速）。上位確定後に補完する。
+        subsidies = [_normalize_api_subsidy(item) for item in raw_list]
 
     total = _extract_total_count(data, len(subsidies))
     return {"subsidies": subsidies, "total_count": total, "error": None}
+
+
+def enrich_with_detail(subsidy: dict) -> dict:
+    """
+    正規化済みのJグランツ補助金1件について、詳細APIで情報を補完する。
+    表示対象に確定した上位の補助金だけに対して呼ぶことで、詳細取得の件数を絞る。
+    詳細が取れなければ元のまま返す。source が jgrants_api 以外はそのまま返す。
+    """
+    if subsidy.get("source") != "jgrants_api":
+        return subsidy
+    # 正規化時に id は "jgrants-<元ID>" 形式になっているため元IDを復元
+    sid = subsidy.get("id", "")
+    if sid.startswith("jgrants-"):
+        sid = sid[len("jgrants-"):]
+    detail = _fetch_subsidy_detail(sid)
+    if not detail:
+        return subsidy
+    # 詳細で補える項目だけ上書き（既に一覧で入っている値は保持）
+    if detail.get("subsidy_rate"):
+        subsidy["subsidy_rate"] = detail["subsidy_rate"]
+    if detail.get("institution_name"):
+        subsidy["organization"] = detail["institution_name"]
+    desc = _strip_html(detail.get("detail") or "")
+    if desc:
+        subsidy["description"] = desc
+    amt = _fmt_amount(detail.get("subsidy_max_limit"))
+    if amt:
+        subsidy["subsidy_max_limit"] = amt
+    # 規模再判定（詳細のdetailテキストを使える）
+    subsidy["eligible_scale"] = _detect_scale({**detail})
+    return subsidy
 
 
 def get_custom_subsidies() -> list[dict]:
@@ -508,9 +549,24 @@ def search_subsidies_multi_keywords(
     errors: list[str] = []
     api_errors: list[str] = []
 
-    for keyword in keywords:
-        # --- JグランツAPI ---
-        api_result = search_subsidies_from_api(keyword, limit=limit_per_keyword)
+    # キーワードごとのJグランツAPI検索はネットワーク待ちが主なので並列実行する。
+    # 直列だと「キーワード数 × 応答時間」で積み上がるが、並列なら最も遅い1回分で済む。
+    # 詳細取得はここでは行わない（fetch_detail=False）。一覧情報だけで高速に集め、
+    # 詳細は matcher 側で「表示する上位数件」に対してのみ enrich_with_detail で補完する。
+    if keywords:
+        with ThreadPoolExecutor(max_workers=len(keywords)) as executor:
+            api_results = list(
+                executor.map(
+                    lambda kw: search_subsidies_from_api(
+                        kw, limit=limit_per_keyword, fetch_detail=False
+                    ),
+                    keywords,
+                )
+            )
+    else:
+        api_results = []
+
+    for keyword, api_result in zip(keywords, api_results):
         if api_result["error"]:
             api_errors.append(api_result["error"])
         api_subsidies = api_result["subsidies"]
