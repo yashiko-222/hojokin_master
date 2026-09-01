@@ -383,6 +383,7 @@ def analyze(request: AnalyzeRequest):
         summary=crawl_result.get("summary", ""),
         industries=crawl_result.get("industries", []),
         company_size=crawl_result.get("company_size"),
+        prefecture=crawl_result.get("prefecture"),
     )
 
     return AnalyzeResponse(

@@ -441,6 +441,7 @@ def match_subsidies(
     summary: str = "",
     industries: list[dict] | None = None,
     company_size: dict | None = None,
+    prefecture: str | None = None,
 ) -> dict:
     """
     抽出キーワード・概要・業種・企業規模から補助金を検索し、関連度順にランキングする。
@@ -490,6 +491,27 @@ def match_subsidies(
         """
         return not (definitely_large and subsidy.get("eligible_scale", "sme") == "sme")
 
+    # 企業の所在地（都道府県）。HPから取れなければ None で地域フィルタは無効。
+    company_pref = (prefecture or "").strip()
+    region_excluded = 0
+
+    def _region_ok(subsidy: dict) -> bool:
+        """
+        対象地域の適合判定。
+        企業所在地が不明なら常にOK（フィルタしない）。
+        補助金の対象地域が「全国」または空ならOK（全国対象）。
+        それ以外（特定地域）で企業所在地と一致しなければ除外する。
+        """
+        if not company_pref:
+            return True
+        area = str(subsidy.get("target_area") or "").strip()
+        if not area or "全国" in area:
+            return True
+        # 企業の都道府県名（「東京都」→「東京」等の表記ゆれも許容）が
+        # 対象地域文字列に含まれていればOK
+        pref_core = company_pref.rstrip("都道府県")
+        return (company_pref in area) or (pref_core in area)
+
     # ===== 1. Jグランツ内蔵データの検索・スコアリング =====
     # 速度優先で1キーワードあたりの取得件数を絞る（API呼び出し総数を削減）。
     api_result = search_subsidies_multi_keywords(search_terms, limit_per_keyword=3)
@@ -498,6 +520,10 @@ def match_subsidies(
     for subsidy in api_result["subsidies"]:
         if not _scale_ok(subsidy):
             builtin_excluded += 1
+            continue
+        # 対象地域が企業所在地と合わない補助金を除外（企業所在地が不明なら無効）
+        if not _region_ok(subsidy):
+            region_excluded += 1
             continue
         score = calculate_relevance_score(
             subsidy, extracted_keywords, search_terms, summary, industries

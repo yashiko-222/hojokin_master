@@ -574,6 +574,44 @@ def get_internal_links(html: str, base_url: str, max_links: int = 6) -> list[str
     return result
 
 
+# 都道府県リスト（HP本文からの所在地抽出・地域フィルタ用）
+_PREFECTURES = [
+    "北海道", "青森県", "岩手県", "宮城県", "秋田県", "山形県", "福島県",
+    "茨城県", "栃木県", "群馬県", "埼玉県", "千葉県", "東京都", "神奈川県",
+    "新潟県", "富山県", "石川県", "福井県", "山梨県", "長野県", "岐阜県",
+    "静岡県", "愛知県", "三重県", "滋賀県", "京都府", "大阪府", "兵庫県",
+    "奈良県", "和歌山県", "鳥取県", "島根県", "岡山県", "広島県", "山口県",
+    "徳島県", "香川県", "愛媛県", "高知県", "福岡県", "佐賀県", "長崎県",
+    "熊本県", "大分県", "宮崎県", "鹿児島県", "沖縄県",
+]
+
+
+def extract_prefecture(text: str) -> str | None:
+    """
+    HP本文から企業所在地の都道府県を推定する。
+    「本社」「所在地」「住所」の近くに出現する都道府県を優先し、
+    無ければ本文中で最も多く出現する都道府県を採用する。
+    抽出できなければ None（この場合は地域フィルタを適用しない）。
+    """
+    if not text:
+        return None
+
+    # 1) 所在地キーワードの近傍を優先
+    for anchor in ("本社", "所在地", "住所", "本店"):
+        idx = text.find(anchor)
+        if idx != -1:
+            window = text[idx: idx + 60]
+            for pref in _PREFECTURES:
+                if pref in window:
+                    return pref
+
+    # 2) 本文中の出現回数が最も多い都道府県
+    counts = {p: text.count(p) for p in _PREFECTURES if p in text}
+    if counts:
+        return max(counts, key=counts.get)
+    return None
+
+
 def crawl_and_extract(url: str, crawl_subpages: bool = True) -> dict:
     """
     企業HPをクロールしてキーワードを抽出するメイン関数。
@@ -589,6 +627,7 @@ def crawl_and_extract(url: str, crawl_subpages: bool = True) -> dict:
             "summary": str,           # 事業概要の要約
             "industries": list[dict], # 推定業種
             "company_size": dict,     # 企業規模の推定（size/is_listed/signals）
+            "prefecture": str | None, # 推定所在地（都道府県）。取れなければNone
             "pages_crawled": int,
             "error": str or None
         }
@@ -630,12 +669,16 @@ def crawl_and_extract(url: str, crawl_subpages: bool = True) -> dict:
         # 企業規模の推定（業種別の中小企業基準で判定）
         company_size = estimate_company_size(all_text, industries)
 
+        # 所在地（都道府県）を推定。取れなければ None（地域フィルタ非適用）
+        prefecture = extract_prefecture(all_text)
+
         return {
             "url": url,
             "keywords": keywords,
             "summary": summary,
             "industries": industries,
             "company_size": company_size,
+            "prefecture": prefecture,
             "pages_crawled": pages_crawled,
             "error": None,
         }
@@ -647,6 +690,7 @@ def crawl_and_extract(url: str, crawl_subpages: bool = True) -> dict:
             "summary": "",
             "industries": [],
             "company_size": {"size": "unknown", "is_listed": False, "signals": []},
+            "prefecture": None,
             "pages_crawled": 0,
             "error": f"ページの取得に失敗しました: {str(e)}",
         }
@@ -657,6 +701,7 @@ def crawl_and_extract(url: str, crawl_subpages: bool = True) -> dict:
             "summary": "",
             "industries": [],
             "company_size": {"size": "unknown", "is_listed": False, "signals": []},
+            "prefecture": None,
             "pages_crawled": 0,
             "error": f"エラーが発生しました: {str(e)}",
         }

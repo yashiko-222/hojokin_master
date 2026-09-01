@@ -105,6 +105,7 @@ def _normalize_api_subsidy(item: dict) -> dict:
         "subsidy_max_limit": _fmt_amount(item.get("subsidy_max_limit")) or "情報なし",
         "subsidy_rate": item.get("subsidy_rate") or "情報なし",
         "target": target,
+        "target_area": item.get("target_area_search") or "",
         "organization": item.get("institution_name") or "情報なし",
         "description": description,
         "official_url": official_url,
